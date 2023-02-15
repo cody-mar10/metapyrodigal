@@ -18,7 +18,7 @@ FASTA_WIDTH = 75
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Find ORFs from query genomes using pyrodigal, the cythonized prodigal API"
+        description=f"Find ORFs from query genomes using pyrodigal v{pyrodigal_version}, the cythonized prodigal API"
     )
     parser.add_argument(
         "-i",
