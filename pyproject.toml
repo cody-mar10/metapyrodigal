@@ -1,0 +1,25 @@
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metapyrodigal"
+version = "0.0.1"
+authors = [{ name = "Cody Martin", email = "codycmar10@gmail.com" }]
+description = "Pyrodigal cli optimized for metagenomic data"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = ["pyrodigal == 1.1.1"]
+
+[project.scripts]
+pyrodigal = "prodigal.main"
+
+[project.urls]
+"Homepage" = "https://github.com/cody-mar10/metapyrodigal"
+"Bug Tracker" = "https://github.com/cody-mar10/metapyrodigal/issues"
