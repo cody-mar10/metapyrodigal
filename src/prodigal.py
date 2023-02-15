@@ -167,6 +167,8 @@ def main():
             ),
         )
 
+    logging.info(f"Finished predicting ORFs for {len(files)} file(s).")
+
 
 if __name__ == "__main__":
     main()
