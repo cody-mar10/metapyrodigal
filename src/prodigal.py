@@ -16,99 +16,6 @@ MAX_PYRODIGAL_THREADS = 4
 FASTA_WIDTH = 75
 
 
-def _find_orfs(
-    orf_finder: pyrodigal.OrfFinder, name: str, seq: str
-) -> tuple[str, pyrodigal.Genes]:
-    orfs = orf_finder.find_genes(seq)
-    return name, orfs
-
-
-def find_orfs(
-    orf_finder: pyrodigal.OrfFinder,
-    file: Path,
-    outdir: Path,
-    write_genes: bool,
-    threads: int,
-):
-    names: list[str] = list()
-    sequences: list[str] = list()
-    for name, seq in fastaparser(file):
-        names.append(name)
-        sequences.append(seq)
-
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        orfs = dict(executor.map(_find_orfs, repeat(orf_finder), names, sequences))
-
-    # TODO: optionally write .ffn genes file
-    output = outdir.joinpath(file.with_suffix(".faa").name)
-    genes_output = outdir.joinpath(file.with_suffix(".ffn").name)
-
-    if write_genes:
-        log_msg = f"Writing nucleotide and protein ORFs for {file} to {outdir}"
-    else:
-        log_msg = f"Writing protein ORFs for {file} to {output}"
-
-    logging.info(log_msg)
-
-    with ExitStack() as ctx:
-        ptn_fp = ctx.enter_context(output.open("w"))
-        genes_fp = ctx.enter_context(genes_output.open("w")) if write_genes else None
-        for name, genes in orfs.items():
-            prefix = f"{name}_"
-            genes.write_translations(ptn_fp, prefix=prefix, width=FASTA_WIDTH)
-            if genes_fp is not None:
-                genes.write_genes(genes_fp, prefix=prefix, width=FASTA_WIDTH)
-
-
-def main(
-    files: list[Path],
-    outdir: Path,
-    write_genes: bool,
-    threads: int,
-    max_cpus: int,
-    log: Path,
-):
-    if len(files) == 1:
-        # TODO: should make this overrideable
-        outdir = Path.cwd()
-    outdir.mkdir(exist_ok=True, parents=True)
-    logging.basicConfig(
-        filename=log,
-        level=logging.INFO,
-        format="[%(asctime)s] %(levelname)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    logging.info(
-        f"Predicting ORFs for {len(files)} files using Pyrodigal v{pyrodigal_version}"
-    )
-    orf_finder = pyrodigal.OrfFinder(meta=True, mask=True)
-
-    if len(files) == 1:
-        # if one file, use max pyrodigal threads for best performance
-        threads = MAX_PYRODIGAL_THREADS
-    else:
-        threads = min(threads, MAX_PYRODIGAL_THREADS)
-
-    n_proc = max_cpus // threads
-    if n_proc == 0:
-        # basically if max_cpus < threads
-        n_proc = 1
-    else:
-        n_proc = min(len(files), n_proc)
-
-    with multiprocessing.Pool(processes=n_proc) as pool:
-        pool.starmap(
-            find_orfs,
-            zip(
-                repeat(orf_finder),
-                files,
-                repeat(outdir),
-                repeat(write_genes),
-                repeat(threads),
-            ),
-        )
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Find ORFs from query genomes using pyrodigal, the cythonized prodigal API"
@@ -162,7 +69,51 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-if __name__ == "__main__":
+def _find_orfs(
+    orf_finder: pyrodigal.OrfFinder, name: str, seq: str
+) -> tuple[str, pyrodigal.Genes]:
+    orfs = orf_finder.find_genes(seq)
+    return name, orfs
+
+
+def find_orfs(
+    orf_finder: pyrodigal.OrfFinder,
+    file: Path,
+    outdir: Path,
+    write_genes: bool,
+    threads: int,
+):
+    names: list[str] = list()
+    sequences: list[str] = list()
+    for name, seq in fastaparser(file):
+        names.append(name)
+        sequences.append(seq)
+
+    with ThreadPoolExecutor(max_workers=threads) as executor:
+        orfs = dict(executor.map(_find_orfs, repeat(orf_finder), names, sequences))
+
+    # TODO: optionally write .ffn genes file
+    output = outdir.joinpath(file.with_suffix(".faa").name)
+    genes_output = outdir.joinpath(file.with_suffix(".ffn").name)
+
+    if write_genes:
+        log_msg = f"Writing nucleotide and protein ORFs for {file} to {outdir}"
+    else:
+        log_msg = f"Writing protein ORFs for {file} to {output}"
+
+    logging.info(log_msg)
+
+    with ExitStack() as ctx:
+        ptn_fp = ctx.enter_context(output.open("w"))
+        genes_fp = ctx.enter_context(genes_output.open("w")) if write_genes else None
+        for name, genes in orfs.items():
+            prefix = f"{name}_"
+            genes.write_translations(ptn_fp, prefix=prefix, width=FASTA_WIDTH)
+            if genes_fp is not None:
+                genes.write_genes(genes_fp, prefix=prefix, width=FASTA_WIDTH)
+
+
+def main():
     args = parse_args()
 
     if args.pattern:
@@ -170,11 +121,52 @@ if __name__ == "__main__":
     else:
         files: list[Path] = args.input
 
-    main(
-        files=files,
-        outdir=args.outdir,
-        write_genes=args.genes,
-        threads=args.threads,
-        max_cpus=args.max_cpus,
-        log=args.log,
+    outdir = args.outdir
+    write_genes = args.genes
+    threads = args.threads
+    max_cpus = args.max_cpus
+    log = args.log
+
+    if len(files) == 1:
+        # TODO: should make this overrideable
+        outdir = Path.cwd()
+    outdir.mkdir(exist_ok=True, parents=True)
+    logging.basicConfig(
+        filename=log,
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
+    logging.info(
+        f"Predicting ORFs for {len(files)} files using Pyrodigal v{pyrodigal_version}"
+    )
+    orf_finder = pyrodigal.OrfFinder(meta=True, mask=True)
+
+    if len(files) == 1:
+        # if one file, use max pyrodigal threads for best performance
+        threads = MAX_PYRODIGAL_THREADS
+    else:
+        threads = min(threads, MAX_PYRODIGAL_THREADS)
+
+    n_proc = max_cpus // threads
+    if n_proc == 0:
+        # basically if max_cpus < threads
+        n_proc = 1
+    else:
+        n_proc = min(len(files), n_proc)
+
+    with multiprocessing.Pool(processes=n_proc) as pool:
+        pool.starmap(
+            find_orfs,
+            zip(
+                repeat(orf_finder),
+                files,
+                repeat(outdir),
+                repeat(write_genes),
+                repeat(threads),
+            ),
+        )
+
+
+if __name__ == "__main__":
+    main()
