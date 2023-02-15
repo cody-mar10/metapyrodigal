@@ -18,7 +18,7 @@ classifiers = [
 dependencies = ["pyrodigal == 1.1.1"]
 
 [project.scripts]
-pyrodigal = "prodigal.main"
+pyrodigal = "prodigal:main"
 
 [project.urls]
 "Homepage" = "https://github.com/cody-mar10/metapyrodigal"
