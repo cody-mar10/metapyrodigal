@@ -74,10 +74,7 @@ def parse_args() -> Args:
         default=Path.cwd(),
         type=Path,
         metavar="DIR",
-        help=(
-            "output directory - If you only are predicting for a single file, this "
-            "will automatically become the cwd (default: %(default)s)"
-        ),
+        help=("output directory (default: %(default)s)"),
     )
     parser.add_argument(
         "-c",
