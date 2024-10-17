@@ -31,6 +31,7 @@ class Args:
     max_cpus: int
     genes: bool
     virus_mode: bool
+    extension: str
 
     @classmethod
     def from_namespace(cls, namespace: argparse.Namespace):
@@ -81,12 +82,8 @@ def parse_args() -> Args:
         "--max-cpus",
         type=int,
         metavar="INT",
-        default=20,
-        help=(
-            "number of files to process in parallel. For single file inputs (single "
-            "contig genomes), this will chunk that file into this many chunks and "
-            "process them in parallel (default: %(default)s)"
-        ),
+        default=1,
+        help=("maximum number of threads to use (default: %(default)s)"),
     )
     parser.add_argument(
         "--genes",
@@ -97,6 +94,13 @@ def parse_args() -> Args:
         "--virus-mode",
         action="store_true",
         help="use pyrodigal-gv to activate the virus models (default: %(default)s)",
+    )
+    parser.add_argument(
+        "-x",
+        "--extension",
+        metavar="STR",
+        default="fna",
+        help="genome FASTA file extension if using -d/--input-dir (default: %(default)s)",
     )
     return Args.from_namespace(parser.parse_args())
 
@@ -234,9 +238,12 @@ def find_orfs_multiple_files(
 
 def main():
     args = parse_args()
+    ext = args.extension
+    if ext[0] != ".":
+        ext = f".{ext}"
 
     if args.input_dir is not None:
-        files = list(args.input_dir.glob("*.fna"))
+        files = list(args.input_dir.glob(f"*{ext}"))
     elif args.input is not None:
         files = args.input
     else:
