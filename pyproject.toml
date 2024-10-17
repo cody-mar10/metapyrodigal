@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metapyrodigal"
-version = "1.1.0"
+version = "1.2.0"
 authors = [{ name = "Cody Martin", email = "codycmar10@gmail.com" }]
 description = "Pyrodigal cli optimized for metagenomic data"
 readme = "README.md"
