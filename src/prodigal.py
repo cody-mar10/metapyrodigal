@@ -1,170 +1,291 @@
-#!/usr/bin/env python3
 import argparse
 import logging
-import multiprocessing
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-from glob import iglob
-from itertools import repeat
+from dataclasses import dataclass
+from dataclasses import fields as dataclass_fields
+from functools import partial
 from pathlib import Path
+from typing import Literal, Optional, overload
 
 import pyrodigal
+import pyrodigal_gv
+from fastatools import FastaFile
 from pyrodigal._version import __version__ as pyrodigal_version
-from fastatools.fastaparser import fastaparser
+from tqdm import tqdm
 
-MAX_PYRODIGAL_THREADS = 4
 FASTA_WIDTH = 75
+OUTPUT_FASTA_SUFFICES = Literal[".faa", ".ffn"]
+
+GeneFinderT = pyrodigal.GeneFinder | pyrodigal_gv.ViralGeneFinder
+
+LOGGER = sys.stdout
 
 
-def parse_args() -> argparse.Namespace:
+@dataclass
+class Args:
+    input: Optional[list[Path]]
+    input_dir: Optional[Path]
+    outdir: Path
+    max_cpus: int
+    genes: bool
+    virus_mode: bool
+
+    @classmethod
+    def from_namespace(cls, namespace: argparse.Namespace):
+        fields = {
+            field.name: getattr(namespace, field.name)
+            for field in dataclass_fields(cls)
+        }
+
+        return cls(**fields)
+
+
+def parse_args() -> Args:
     parser = argparse.ArgumentParser(
-        description=f"Find ORFs from query genomes using pyrodigal v{pyrodigal_version}, the cythonized prodigal API"
+        description=(
+            f"Find ORFs from query genomes using pyrodigal v{pyrodigal_version}, "
+            "the cythonized prodigal API"
+        )
     )
-    parser.add_argument(
+
+    input_args = parser.add_mutually_exclusive_group(required=True)
+
+    input_args.add_argument(
         "-i",
         "--input",
         nargs="+",
+        metavar="FILE",
         type=Path,
-        required=True,
         help="fasta file(s) of query genomes (can use unix wildcards)",
     )
+    input_args.add_argument(
+        "-d",
+        "--input-dir",
+        metavar="DIR",
+        type=Path,
+        help="directory of fasta files to process",
+    )
+
     parser.add_argument(
         "-o",
         "--outdir",
         default=Path.cwd(),
         type=Path,
-        help="output directory - If you only are predicting for a single file, this will automatically become the cwd (default: %(default)s)",
-    )
-    parser.add_argument(
-        "-t",
-        "--threads",
-        type=int,
-        default=1,
-        help="number of parallel threads for orf prediction. Max value is 4, with best results for multiple files being 1 thread per process. You should not usually change this, although for single file inputs, this will always be changed to 4 for best performance. See -c/--cpu option, which specifies the maximum CPU usage. (default: %(default)s)",
+        metavar="DIR",
+        help=(
+            "output directory - If you only are predicting for a single file, this "
+            "will automatically become the cwd (default: %(default)s)"
+        ),
     )
     parser.add_argument(
         "-c",
         "--max-cpus",
         type=int,
+        metavar="INT",
         default=20,
-        help="number of files to process in parallel. This controls the MAXIMUM CPU usage. It is best to make this a multiple of -t/--threads; otherwise, your max usage will be rounded down. (default: %(default)s)",
-    )
-    parser.add_argument(
-        "-l",
-        "--log",
-        type=Path,
-        default="pyrodigal.log",
-        help="log file (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--pattern",
-        action="store_true",
-        help="use if -i/--input is a glob pattern and the shell could not expand (ie if too many files) (default: %(default)s)",
+        help=(
+            "number of files to process in parallel. For single file inputs (single "
+            "contig genomes), this will chunk that file into this many chunks and "
+            "process them in parallel (default: %(default)s)"
+        ),
     )
     parser.add_argument(
         "--genes",
         action="store_true",
         help="use to also output the nucleotide genes .ffn file (default: %(default)s)",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--virus-mode",
+        action="store_true",
+        help="use pyrodigal-gv to activate the virus models (default: %(default)s)",
+    )
+    return Args.from_namespace(parser.parse_args())
 
 
-def _find_orfs(
-    orf_finder: pyrodigal.OrfFinder, name: str, seq: str
-) -> tuple[str, pyrodigal.Genes]:
-    orfs = orf_finder.find_genes(seq)
-    return name, orfs
+@overload
+def create_orf_finder(virus_mode: Literal[False], **kwargs) -> pyrodigal.GeneFinder: ...
+
+
+@overload
+def create_orf_finder(
+    virus_mode: Literal[True], **kwargs
+) -> pyrodigal_gv.ViralGeneFinder: ...
+
+
+@overload
+def create_orf_finder(virus_mode: bool, **kwargs) -> GeneFinderT: ...
+
+
+def create_orf_finder(virus_mode: bool, **kwargs) -> GeneFinderT:
+    kwargs["meta"] = kwargs.pop("meta", True)
+    kwargs["mask"] = kwargs.pop("mask", True)
+
+    if virus_mode:
+        return pyrodigal_gv.ViralGeneFinder(**kwargs)
+
+    return pyrodigal.GeneFinder(**kwargs)
+
+
+def get_output_name(file: Path, outdir: Path, suffix: OUTPUT_FASTA_SUFFICES) -> Path:
+    return outdir.joinpath(file.with_suffix(suffix).name)
+
+
+def find_orfs_single_file(
+    file: Path,
+    orf_finder: GeneFinderT,
+    outdir: Path,
+    write_genes: bool,
+    max_threads: int,
+):
+    protein_output = get_output_name(file, outdir, ".faa")
+    genes_output = get_output_name(file, outdir, ".ffn")
+
+    scaffolds = {
+        record.header.name: record.sequence.encode()
+        for record in FastaFile(file).parse()
+    }
+
+    n_threads = min(len(scaffolds), max_threads)
+
+    with ExitStack() as ctx:
+        pool = ctx.enter_context(ThreadPoolExecutor(max_workers=n_threads))
+        protein_fp = ctx.enter_context(protein_output.open("w"))
+        genes_fp = ctx.enter_context(genes_output.open("w")) if write_genes else None
+
+        pbar = ctx.enter_context(
+            tqdm(
+                total=len(scaffolds),
+                desc="Predicting ORFs for each scaffold",
+                unit="scaffold",
+                file=LOGGER,
+            )
+        )
+
+        for scaffold_header, scaffold_genes in zip(
+            scaffolds.keys(),
+            pool.map(orf_finder.find_genes, scaffolds.values()),
+        ):
+            scaffold_genes.write_translations(
+                protein_fp, sequence_id=scaffold_header, width=FASTA_WIDTH
+            )
+
+            if genes_fp is not None:
+                scaffold_genes.write_genes(
+                    genes_fp, sequence_id=scaffold_header, width=FASTA_WIDTH
+                )
+
+            pbar.update()
 
 
 def find_orfs(
-    orf_finder: pyrodigal.OrfFinder,
     file: Path,
+    orf_finder: pyrodigal.GeneFinder,
+) -> list[pyrodigal.Genes]:
+    orfs = [
+        orf_finder.find_genes(record.sequence) for record in FastaFile(file).parse()
+    ]
+
+    return orfs
+
+
+def find_orfs_multiple_files(
+    files: list[Path],
+    orf_finder: GeneFinderT,
     outdir: Path,
     write_genes: bool,
-    threads: int,
+    n_threads: int = 1,
 ):
-    names: list[str] = list()
-    sequences: list[str] = list()
-    for name, seq in fastaparser(file):
-        names.append(name)
-        sequences.append(seq)
+    find_orfs_fn = partial(find_orfs, orf_finder=orf_finder)
+    with ThreadPoolExecutor(max_workers=n_threads) as pool:
+        pbar = tqdm(
+            total=len(files),
+            desc="Predicting ORFs for each file",
+            unit="file",
+            file=LOGGER,
+        )
 
-    with ThreadPoolExecutor(max_workers=threads) as executor:
-        orfs = dict(executor.map(_find_orfs, repeat(orf_finder), names, sequences))
+        for file, genelist in zip(files, pool.map(find_orfs_fn, files)):
+            protein_output = get_output_name(file, outdir, ".faa")
+            genes_output = get_output_name(file, outdir, ".ffn")
 
-    # TODO: optionally write .ffn genes file
-    output = outdir.joinpath(file.with_suffix(".faa").name)
-    genes_output = outdir.joinpath(file.with_suffix(".ffn").name)
+            with ExitStack() as ctx:
+                protein_fp = ctx.enter_context(protein_output.open("w"))
+                genes_fp = (
+                    ctx.enter_context(genes_output.open("w")) if write_genes else None
+                )
 
-    if write_genes:
-        log_msg = f"Writing nucleotide and protein ORFs for {file} to {outdir}"
-    else:
-        log_msg = f"Writing protein ORFs for {file} to {output}"
+                for scaffold_header, genes in zip(
+                    FastaFile(file).parse_headers(), genelist
+                ):
 
-    logging.info(log_msg)
+                    genes.write_translations(
+                        protein_fp, sequence_id=scaffold_header.name, width=FASTA_WIDTH
+                    )
 
-    with ExitStack() as ctx:
-        ptn_fp = ctx.enter_context(output.open("w"))
-        genes_fp = ctx.enter_context(genes_output.open("w")) if write_genes else None
-        for name, genes in orfs.items():
-            prefix = f"{name}_"
-            genes.write_translations(ptn_fp, prefix=prefix, width=FASTA_WIDTH)
-            if genes_fp is not None:
-                genes.write_genes(genes_fp, prefix=prefix, width=FASTA_WIDTH)
+                    if genes_fp is not None:
+                        genes.write_genes(
+                            genes_fp,
+                            sequence_id=scaffold_header.name,
+                            width=FASTA_WIDTH,
+                        )
+
+            pbar.update()
+    pbar.close()
 
 
 def main():
     args = parse_args()
 
-    if args.pattern:
-        files = [Path(file) for file in iglob(args.input[0].as_posix())]
+    if args.input_dir is not None:
+        files = list(args.input_dir.glob("*.fna"))
+    elif args.input is not None:
+        files = args.input
     else:
-        files: list[Path] = args.input
+        raise ValueError("No input files provided")
 
     outdir = args.outdir
     write_genes = args.genes
-    threads = args.threads
     max_cpus = args.max_cpus
-    log = args.log
 
-    if len(files) == 1:
-        # TODO: should make this overrideable
-        outdir = Path.cwd()
     outdir.mkdir(exist_ok=True, parents=True)
+
     logging.basicConfig(
-        filename=log,
+        stream=LOGGER,
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    logging.info(
-        f"Predicting ORFs for {len(files)} files using Pyrodigal v{pyrodigal_version}"
-    )
-    orf_finder = pyrodigal.OrfFinder(meta=True, mask=True)
+    msg = f"Predicting ORFs for {len(files)} files using Pyrodigal v{pyrodigal_version}"
+
+    if args.virus_mode:
+        msg += " with virus mode enabled (ie pyrodigal-gv)"
+
+    logging.info(msg)
+
+    orf_finder = create_orf_finder(virus_mode=args.virus_mode)
 
     if len(files) == 1:
-        # if one file, use max pyrodigal threads for best performance
-        threads = MAX_PYRODIGAL_THREADS
+        # it is likely that this is a much larger than normal FASTA file
+        # since viral genomes are typically single scaffolds, so they can all be in
+        # a single file
+        find_orfs_single_file(
+            file=files[0],
+            orf_finder=orf_finder,
+            outdir=outdir,
+            write_genes=write_genes,
+            max_threads=max_cpus,
+        )
     else:
-        threads = min(threads, MAX_PYRODIGAL_THREADS)
-
-    n_proc = max_cpus // threads
-    if n_proc == 0:
-        # basically if max_cpus < threads
-        n_proc = 1
-    else:
-        n_proc = min(len(files), n_proc)
-
-    with multiprocessing.Pool(processes=n_proc) as pool:
-        pool.starmap(
-            find_orfs,
-            zip(
-                repeat(orf_finder),
-                files,
-                repeat(outdir),
-                repeat(write_genes),
-                repeat(threads),
-            ),
+        # this is likely for MAGs so each file is a single genome composed of multiple scaffolds
+        n_threads = min(len(files), max_cpus)
+        find_orfs_multiple_files(
+            files=files,
+            orf_finder=orf_finder,
+            outdir=outdir,
+            write_genes=write_genes,
+            n_threads=n_threads,
         )
 
     logging.info(f"Finished predicting ORFs for {len(files)} file(s).")
