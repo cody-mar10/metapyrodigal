@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metapyrodigal"
-version = "1.3.0"
+version = "1.3.1"
 authors = [{ name = "Cody Martin", email = "codycmar10@gmail.com" }]
 description = "Pyrodigal cli optimized for metagenomic data"
 readme = "README.md"
@@ -15,7 +15,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
 ]
 dependencies = [
-    "pyrodigal >= 3.5",
+    "pyrodigal == 3.5.2",
     "tqdm >= 4.42",
     "pyrodigal-gv",
     "pyfastatools>=2",
