@@ -1,11 +1,10 @@
-
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "metapyrodigal"
-version = "1.2.0"
+version = "1.3.0"
 authors = [{ name = "Cody Martin", email = "codycmar10@gmail.com" }]
 description = "Pyrodigal cli optimized for metagenomic data"
 readme = "README.md"
@@ -19,7 +18,7 @@ dependencies = [
     "pyrodigal >= 3.5",
     "tqdm >= 4.42",
     "pyrodigal-gv",
-    "pyfastatools",
+    "pyfastatools>=2",
 ]
 
 [project.scripts]
