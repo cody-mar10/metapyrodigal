@@ -6,7 +6,7 @@ This library is a simple wrapper of [pyrodigal](https://github.com/althonos/pyro
 
 Pyrodigal is mostly written for single genomes or FASTA files, so this tool was created to batch process metagenomic-scale datasets. Metagenomic data usually consists of large number of genome files for MAGs. Additionally, viral metagenomic datasets tend to store all single-scaffold viruses in a single file, which tends to be much larger than a typical single-genome FASTA file.
 
-This tool parallelizes pyrodigal over large amounts of files (MAGs) or FASTA files that have a large number of scaffolds (viruses).
+This tool uses different load balancing strategies to parallelize pyrodigal over large amounts of files (MAGs) or FASTA files that have a large number of scaffolds (viruses).
 
 ## Installation
 
@@ -31,8 +31,8 @@ This tool will overwrite the `pyrodigal` binary, so you can use the metagenome-f
 The help page from `pyrodigal -h` looks like this:
 
 ```txt
-usage: pyrodigal [-h] (-i FILE [FILE ...] | -d DIR) [-o DIR] [-c INT] [--genes]
-                 [--virus-mode]
+usage: pyrodigal [-h] (-i FILE [FILE ...] | -d DIR) [-o DIR] [-c INT] [--genes] [--virus-mode] [-x STR]
+                 [--allow-unordered]
 
 Find ORFs from query genomes using pyrodigal v3.5.2, the cythonized prodigal API
 
@@ -42,13 +42,20 @@ options:
                         fasta file(s) of query genomes (can use unix wildcards)
   -d DIR, --input-dir DIR
                         directory of fasta files to process
-  -o DIR, --outdir DIR  output directory (default: CWD)
+  -o DIR, --outdir DIR  output directory (default: /storage2/scratch/ccmartin6/software/metapyrodigal)
   -c INT, --max-cpus INT
                         maximum number of threads to use (default: 1)
-  --genes               use to also output the nucleotide genes .ffn file (default: False)
+  --genes               use to also output the nucleotide genes .ffn file
   --virus-mode          use pyrodigal-gv to activate the virus models (default: False)
   -x STR, --extension STR
                         genome FASTA file extension if using -d/--input-dir (default: fna)
+  --allow-unordered     for a single file input, this allows the protein ORFs to be written per scaffold as
+                        available. All protein ORFs for each scaffold will be in order, but the scaffolds will not
+                        necessarily be in the same order as in the input nucleotide file. **This is useful if you
+                        are extremely memory limited,** since the default strategy can lead to the ORFs being
+                        stored in memory for awhile before writing to file as the original scaffold order is
+                        maintained. NOTE: This is about 20 percent faster, so it is recommended to use this if the
+                        order of scaffolds does not matter.
 ```
 
 `-i` and `-d` are mutually exclusive but one of them must be provided.
